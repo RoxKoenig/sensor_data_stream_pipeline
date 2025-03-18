@@ -1,0 +1,108 @@
+version: '3.8'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      TZ: Europe/Berlin
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    networks:
+      - sensor-net
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      TZ: Europe/Berlin
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "kafka:9092", "--list"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    depends_on:
+      - zookeeper
+    networks:
+      - sensor-net
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg14
+    container_name: timescaledb
+    environment:
+      POSTGRES_DB: sensor_data_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: mysecretpassword
+      TZ: Europe/Berlin
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sensor_data_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - sensor-net
+
+  producer:
+    build: .
+    container_name: producer
+    environment:
+      KAFKA_BROKER: "kafka:9092"
+      TZ: Europe/Berlin
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command: ["sh", "-c", "sleep 15 && python producer.py"]
+    networks:
+      - sensor-net
+
+  consumer:
+    build: .
+    container_name: consumer
+    environment:
+      KAFKA_BROKER: "kafka:9092"
+      POSTGRES_HOST: "timescaledb"
+      TZ: Europe/Berlin
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    depends_on:
+      - kafka
+      - timescaledb
+    command: ["sh", "-c", "sleep 20 && python consumer.py"]
+    networks:
+      - sensor-net
+
+volumes:
+  timescaledb_data:
+
+networks:
+  sensor-net:
+    driver: bridge
