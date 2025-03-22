@@ -1,0 +1,102 @@
+name: CI/CD Pipeline for Sensor Data Streaming
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      zookeeper:
+        image: confluentinc/cp-zookeeper:latest
+        ports:
+          - "2181:2181"
+        env:
+          ZOOKEEPER_CLIENT_PORT: 2181
+      kafka:
+        image: confluentinc/cp-kafka:latest
+        ports:
+          - "9092:9092"
+        env:
+          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+        depends_on:
+          - zookeeper
+      timescaledb:
+        image: timescale/timescaledb:latest-pg14
+        ports:
+          - "5432:5432"
+        env:
+          POSTGRES_DB: sensor_data_db
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: mysecretpassword
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Start producer
+        run: python producer.py &
+        env:
+          KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+
+      - name: Start consumer in background
+        run: |
+          python consumer.py > consumer.log 2>&1 &
+          echo $! > consumer.pid
+        env:
+          KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+          POSTGRES_HOST: localhost
+          POSTGRES_DB: sensor_data_db
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: mysecretpassword
+
+      - name: Wait for 100 records to be inserted
+        run: |
+          while true; do
+            count=$(psql -h localhost -U postgres -d sensor_data_db -t -c "SELECT COUNT(*) FROM sensor_data;")
+            if [ "$count" -ge 100 ]; then
+              echo "100 records inserted. Stopping consumer."
+              break
+            fi
+            sleep 5
+          done
+        env:
+          PGPASSWORD: mysecretpassword
+
+      - name: Stop consumer process
+        run: |
+          if [ -f consumer.pid ]; then
+            kill $(cat consumer.pid)
+            echo "Consumer process stopped."
+          else
+            echo "Consumer PID file not found."
+          fi
+
+      - name: Verify data in TimescaleDB
+        run: |
+          psql -h localhost -U postgres -d sensor_data_db -c "SELECT COUNT(*) FROM sensor_data;"
+          psql -h localhost -U postgres -d sensor_data_db -c "SELECT * FROM sensor_data LIMIT 10;"
+        env:
+          PGPASSWORD: mysecretpassword
