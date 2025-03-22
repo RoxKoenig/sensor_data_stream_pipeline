@@ -18,6 +18,7 @@ jobs:
           - "2181:2181"
         env:
           ZOOKEEPER_CLIENT_PORT: 2181
+
       kafka:
         image: confluentinc/cp-kafka:latest
         ports:
@@ -26,8 +27,7 @@ jobs:
           KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
           KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
           KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-        depends_on:
-          - zookeeper
+
       timescaledb:
         image: timescale/timescaledb:latest-pg14
         ports:
