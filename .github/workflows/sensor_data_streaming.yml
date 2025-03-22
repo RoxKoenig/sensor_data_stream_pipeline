@@ -56,6 +56,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Initialize TimescaleDB
+        run: |
+          psql -h localhost -U postgres -d sensor_data_db -f init.sql
+        env:
+          PGPASSWORD: mysecretpassword
+
       - name: Start producer
         run: python producer.py &
         env:
