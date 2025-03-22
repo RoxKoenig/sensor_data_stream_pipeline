@@ -99,11 +99,21 @@ jobs:
         env:
           PGPASSWORD: mysecretpassword
 
+      - name: Let the producer and consumer run a bit longer
+        run: |
+          echo "⏳ Giving system a few more seconds to finish processing..."
+          sleep 10
+
       - name: Stop consumer process
         run: |
           if [ -f consumer.pid ]; then
-            kill $(cat consumer.pid)
-            echo "Consumer process stopped."
+            pid=$(cat consumer.pid)
+            if ps -p $pid > /dev/null 2>&1; then
+              kill $pid
+              echo "Consumer process (PID $pid) stopped."
+            else
+              echo "Consumer process (PID $pid) already exited."
+            fi
           else
             echo "Consumer PID file not found."
           fi
