@@ -68,10 +68,11 @@ services:
       - sensor-net
 
   producer:
-    build: .
+    build:
+      context: .
     container_name: producer
     environment:
-      KAFKA_BROKER: "kafka:9092"
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
       TZ: Europe/Berlin
     volumes:
       - /etc/localtime:/etc/localtime:ro
@@ -79,16 +80,20 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
-    command: ["sh", "-c", "sleep 15 && python producer.py"]
+    command: ["sh", "wait-for-kafka.sh", "python", "producer.py"]
     networks:
       - sensor-net
 
   consumer:
-    build: .
+    build:
+      context: .
     container_name: consumer
     environment:
-      KAFKA_BROKER: "kafka:9092"
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
       POSTGRES_HOST: "timescaledb"
+      POSTGRES_DB: sensor_data_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: mysecretpassword
       TZ: Europe/Berlin
     volumes:
       - /etc/localtime:/etc/localtime:ro
@@ -96,7 +101,7 @@ services:
     depends_on:
       - kafka
       - timescaledb
-    command: ["sh", "-c", "sleep 20 && python consumer.py"]
+    command: ["sh", "wait-for-kafka.sh", "sh", "wait-for-postgres.sh", "python", "consumer.py"]
     networks:
       - sensor-net
 
