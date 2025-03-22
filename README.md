@@ -25,3 +25,16 @@ This project implements a real-time data streaming pipeline for environmental se
 
 ## 📂 Project Structure
 
+sensor_data_stream_pipeline/
+├── .github/workflows/         # GitHub Actions CI pipeline (optional)
+├── consumer.py                # Kafka consumer script (Python)
+├── producer.py                # Kafka producer script (Python)
+├── docker-compose.yml         # Defines all Docker services
+├── Dockerfile                 # Base image used for services (optional)
+├── init.sql                   # DB init script (TimescaleDB table creation)
+├── requirements.txt           # Python dependencies
+├── wait-for-kafka.sh          # Wait script to ensure Kafka is up before starting services
+├── wait-for-postgres.sh       # Same, but for TimescaleDB
+├── README.md                  # This file
+
+
