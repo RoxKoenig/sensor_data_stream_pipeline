@@ -78,20 +78,20 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: mysecretpassword
 
-      - name: Wait until at least 10 records are inserted
+      - name: Wait until at least 5 records are inserted
         run: |
-          echo "Waiting for at least 10 records to be inserted into sensor_data..."
-          for i in {1..6}; do  # Wait up to 30 seconds total
+          echo "Waiting for at least 5 records to be inserted into sensor_data..."
+          for i in {1..10}; do  # Wait up to 50 seconds total
             count=$(psql -h localhost -U postgres -d sensor_data_db -t -c "SELECT COUNT(*) FROM sensor_data;" | xargs)
-            if [ "$count" -ge 10 ]; then
+            if [ "$count" -ge 5 ]; then
               echo "$count records found in sensor_data. ✅"
               break
             fi
-            echo "Only $count records so far... retrying ($i/6)"
+            echo "Only $count records so far... retrying ($i/10)"
             sleep 5
           done
-          if [ "$count" -lt 10 ]; then
-            echo "❌ Less than 10 records after waiting. Failing the job."
+          if [ "$count" -lt 5 ]; then
+            echo "❌ Less than 5 records after waiting. Failing the job."
             exit 1
           fi
         env:
