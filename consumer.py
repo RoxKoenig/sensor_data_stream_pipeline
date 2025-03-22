@@ -10,13 +10,12 @@ import pytz
 from kafka import KafkaConsumer
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Timezone
 berlin_tz = pytz.timezone('Europe/Berlin')
 
-# Environment variables
+# Environment
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "timescaledb")
 POSTGRES_DB = os.getenv("POSTGRES_DB", "sensor_data_db")
@@ -25,7 +24,6 @@ POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "mysecretpassword")
 
 
 def wait_for_service(host: str, port: int, name: str = "service", retries: int = 10):
-    """Wait until a host:port is reachable"""
     for attempt in range(retries):
         try:
             with socket.create_connection((host, port), timeout=5):
@@ -37,8 +35,7 @@ def wait_for_service(host: str, port: int, name: str = "service", retries: int =
     raise Exception(f"❌ {name} is still not reachable after {retries} retries.")
 
 
-def connect_to_postgres() -> psycopg2.extensions.connection:
-    """Connect to TimescaleDB with retries"""
+def connect_to_postgres():
     retries = 5
     for attempt in range(retries):
         try:
@@ -57,8 +54,7 @@ def connect_to_postgres() -> psycopg2.extensions.connection:
     raise RuntimeError("❌ Could not connect to TimescaleDB after retries.")
 
 
-def create_kafka_consumer() -> KafkaConsumer:
-    """Create Kafka consumer with retries"""
+def create_kafka_consumer():
     for attempt in range(5):
         try:
             consumer = KafkaConsumer(
@@ -67,7 +63,7 @@ def create_kafka_consumer() -> KafkaConsumer:
                 value_deserializer=lambda v: json.loads(v.decode("utf-8")),
                 auto_offset_reset='earliest',
                 group_id='sensor-consumer-group',
-                consumer_timeout_ms=10000,
+                enable_auto_commit=True,  # Kafka will keep track of offsets
                 security_protocol="PLAINTEXT"
             )
             logger.info("✅ Connected to Kafka")
@@ -79,77 +75,79 @@ def create_kafka_consumer() -> KafkaConsumer:
 
 
 def convert_to_utc(timestamp_str: str) -> datetime:
-    """Convert and validate timestamps with timezone awareness"""
     try:
-        # Support ISO 8601 + nanosecond/flexible parsing
         dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
         if not dt.tzinfo:
             dt = berlin_tz.localize(dt)
-
         utc_time = dt.astimezone(pytz.utc)
         current_utc = datetime.now(pytz.utc)
-
-        # Prevent future timestamps due to clock drift
         if utc_time > current_utc + timedelta(seconds=1):
             logger.warning(f"⏳ Future timestamp adjusted: {utc_time.isoformat()}")
             return current_utc - timedelta(microseconds=1)
-
         return utc_time
-    except ValueError as e:
-        logger.error(f"Invalid timestamp format: {timestamp_str}")
-        raise
     except Exception as e:
-        logger.error(f"Unexpected timestamp error: {str(e)}")
+        logger.error(f"Invalid timestamp: {timestamp_str} - {str(e)}")
         raise
 
 
-def main() -> None:
-    """Main consumer loop"""
-    conn = None
-    consumer = None
+def main():
+    logger.info("🔁 Waiting for Kafka and TimescaleDB...")
+    kafka_host, kafka_port = KAFKA_BOOTSTRAP_SERVERS.split(":")
+    wait_for_service(kafka_host, int(kafka_port), "Kafka")
+    wait_for_service(POSTGRES_HOST, 5432, "Postgres")
+
+    conn = connect_to_postgres()
+    consumer = create_kafka_consumer()
+
+    inserted_count = 0
+    BATCH_LOG_EVERY = 10
 
     try:
-        logger.info("🔁 Waiting for Kafka and TimescaleDB...")
-        kafka_host, kafka_port = KAFKA_BOOTSTRAP_SERVERS.split(":")
-        wait_for_service(kafka_host, int(kafka_port), "Kafka")
-        wait_for_service(POSTGRES_HOST, 5432, "Postgres")
-
-        conn = connect_to_postgres()
-        consumer = create_kafka_consumer()
-
         with conn.cursor() as cursor:
             logger.info("📥 Starting to consume messages...")
-            for message in consumer:
+            while True:
                 try:
-                    data = message.value
-                    utc_time = convert_to_utc(data["zeitstempel"])
+                    for message in consumer:
+                        data = message.value
+                        try:
+                            utc_time = convert_to_utc(data["zeitstempel"])
 
-                    cursor.execute("""
-                        INSERT INTO sensor_data (
-                            zeitstempel, 
-                            standort, 
-                            temperatur, 
-                            luftfeuchtigkeit, 
-                            luftqualitaet, 
-                            wetterbedingung
-                        ) VALUES (%s, %s, %s, %s, %s, %s)
-                    """, (
-                        utc_time,
-                        data["standort"],
-                        data["temperatur"],
-                        data["luftfeuchtigkeit"],
-                        data["luftqualitaet"],
-                        data["wetterbedingung"]
-                    ))
-                    conn.commit()
-                    logger.info(f"✅ Inserted: {utc_time.isoformat()} | {data['standort']}")
+                            cursor.execute("""
+                                INSERT INTO sensor_data (
+                                    zeitstempel, 
+                                    standort, 
+                                    temperatur, 
+                                    luftfeuchtigkeit, 
+                                    luftqualitaet, 
+                                    wetterbedingung
+                                ) VALUES (%s, %s, %s, %s, %s, %s)
+                            """, (
+                                utc_time,
+                                data["standort"],
+                                data["temperatur"],
+                                data["luftfeuchtigkeit"],
+                                data["luftqualitaet"],
+                                data["wetterbedingung"]
+                            ))
+                            conn.commit()
+                            inserted_count += 1
 
-                except KeyError as e:
-                    logger.error(f"Missing field {e} in message: {data}")
-                    conn.rollback()
+                            if inserted_count % BATCH_LOG_EVERY == 0:
+                                logger.info(f"📊 Inserted {inserted_count} rows so far...")
+
+                        except KeyError as e:
+                            logger.error(f"Missing field {e} in message: {data}")
+                            conn.rollback()
+                        except Exception as e:
+                            logger.error(f"⚠️ Insert error: {str(e)}")
+                            conn.rollback()
+
+                    time.sleep(1)  # optional: sleep if no new messages
+
                 except Exception as e:
-                    logger.error(f"Processing error: {str(e)}")
-                    conn.rollback()
+                    logger.warning(f"Kafka consume error: {str(e)}. Attempting reconnect...")
+                    time.sleep(5)
+                    consumer = create_kafka_consumer()
 
     except KeyboardInterrupt:
         logger.info("🛑 Graceful shutdown requested")
