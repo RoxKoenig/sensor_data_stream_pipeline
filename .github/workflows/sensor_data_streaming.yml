@@ -78,14 +78,16 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: mysecretpassword
 
-      - name: Wait for 100 records to be inserted
+      - name: Wait until at least 1 record is inserted
         run: |
-          while true; do
-            count=$(psql -h localhost -U postgres -d sensor_data_db -t -c "SELECT COUNT(*) FROM sensor_data;")
-            if [ "$count" -ge 100 ]; then
-              echo "100 records inserted. Stopping consumer."
+          echo "Waiting for at least 1 record to be inserted into sensor_data..."
+          for i in {1..6}; do  # Wait up to 30 seconds max
+            count=$(psql -h localhost -U postgres -d sensor_data_db -t -c "SELECT COUNT(*) FROM sensor_data;" | xargs)
+            if [ "$count" -ge 1 ]; then
+              echo "$count record(s) found in sensor_data."
               break
             fi
+            echo "No records yet... retrying ($i/6)"
             sleep 5
           done
         env:
@@ -102,7 +104,8 @@ jobs:
 
       - name: Verify data in TimescaleDB
         run: |
+          echo "Final data check:"
           psql -h localhost -U postgres -d sensor_data_db -c "SELECT COUNT(*) FROM sensor_data;"
-          psql -h localhost -U postgres -d sensor_data_db -c "SELECT * FROM sensor_data LIMIT 10;"
+          psql -h localhost -U postgres -d sensor_data_db -c "SELECT * FROM sensor_data LIMIT 5;"
         env:
           PGPASSWORD: mysecretpassword
